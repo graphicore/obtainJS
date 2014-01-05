@@ -401,3 +401,38 @@ glifList.getGlif(true, 'a', console.log.bind(console,'callback', glifList), errb
 console.log('----------------------------------')
 console.log('sync result', glifList.getGlif(false, 'a'), '++++++++++++++++++++++++++++++')
 console.log('sync result', glifList.getGlif(false, 'a'))
+
+// using a switch statement could reduce the cost of
+// calling job multiple times. however having that 'state' attached 
+// to the obtain method is maybe too implicit.
+// maybe a obtain('_state') returning an object could be used for that
+// this would do almost the same as yield and be optimization taht could
+// happen occasionally.
+function job(obtain, glyphName /*optional here, can be received via obtain, too*/) {
+        console.log('!!! JOB')
+        
+        //obtain('circle');
+        switch (obtain.goto) {
+            default:
+            case 1:
+                obtain.goto = 1;
+                if(obtain('glyphNameInCache')) {
+                    if(obtain('mtime') === this._glifCache[glyphName][1]) {
+                        // cache is fresh
+                        return this._glifCache[glyphName][0];
+                    }
+                }
+            case 2:
+                obtain.goto = 2;
+                // still here? need read!
+                if(!obtain('pathExists'))
+                    throw new KeyError(glyphName);
+            case 3:
+                obtain.goto = 3;
+                // refreshing the cache
+                this._glifCache[glyphName] = [obtain('text'), obtain('mtime')];
+                // cache is refreshed
+        }
+        delete obtain.goto;
+        return this._glifCache[glyphName][0];
+    }
