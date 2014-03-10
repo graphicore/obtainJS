@@ -16,18 +16,18 @@ function Frame(node, entering) {
     this.entering = entering;
 }
 
-function prepareEvaluation(start, dependencies) {
+function prepareEvaluation(startNode, dependencies) {
     var stack = []
     , dependencyCount = {} // return value
     , dependents = {} // return value
     , entered = {} // detect circles
     , visited = {} // detect circles
     , path = [] // only needed for good error reporting
-    , frame, node, length, i, child
+    , frame, node, length, i, dependency
     ;
     
-    stack.push(new Frame(start, !!dependencies[start].length));
-    dependents[start] = [];
+    stack.push(new Frame(startNode, !!dependencies[startNode].length));
+    dependents[startNode] = [];
     while(stack.length) {
         frame = stack[stack.length-1];
         node = frame.node;
@@ -58,27 +58,28 @@ function prepareEvaluation(start, dependencies) {
         dependencyCount[node] = length = dependencies[node].length;
         
         if(frame.entering) {
-            // entering the nodes children
+            // entering the nodes dependencies
             entered[node] = null;
             frame.entering = false;
             
             for(i=0; i<length; i++) {
-                child = dependencies[node][i];
+                dependency = dependencies[node][i];
                 
                 // create the transpose graph
-                if(!(child in dependents))
-                    dependents[child] = [];
-                dependents[child].push(node);
+                if(!(dependency in dependents))
+                    dependents[dependency] = [];
+                // node is a dependent of dependency
+                dependents[dependency].push(node);
                 
-                if(child in visited)
+                if(dependency in visited)
                     // shortcut: this will be detected at the beginning of
                     // the while loop anyways, so we save us from creating,
                     // pushing and then popping the frame
                     continue;
                 
                 // create a new frame
-                // Frame.entering is true when the node has any children
-                stack.push(new Frame(child, !!dependencies[child].length));
+                // Frame.entering is true when the dependency has any dependencies
+                stack.push(new Frame(dependency, !!dependencies[dependency].length));
             }
         }
         else {
