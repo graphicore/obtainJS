@@ -62,7 +62,6 @@ var obtain = (function obtain () {
     function _receiver(executionManager, errback, obtained, key, type) {
         if(type === 'united') {
             // united receiver for both callback and errback
-            // if the result is intancof Error this calls errback
             function unitedReceiver(error, result) {
                 if(error !== null && error !== undefined){
                     errback(error)
