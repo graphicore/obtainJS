@@ -1,3 +1,5 @@
+"use strict";
+
 (function() {
     
     function NotImplementedError(){}
@@ -8,23 +10,19 @@
         });
         Error.apply(this, Array.prototype.slice.call(arguments))
     }
-    
     Expectation.prototype = Object.create(Error.prototype)
     Expectation.prototype.toString = function expectationString() {
         return '<Expectation ' + this.name +'>'
     }
+
     
-    Expectation.prototype.toString = function expectationString() {
-        return '<Expectation ' + this.name +'>'
-    }
-    
-    function Argument(name) {
-        Object.defineProperty(this, 'name', {
-            get: function() { return name; }
+    function Argument(value) {
+        Object.defineProperty(this, 'value', {
+            get: function() { return value; }
         });
     }
     Argument.prototype.toString = function argumentString() {
-        return '<Argument ' + this.name +'>'
+        return '<Argument ' + this.value +'>'
     }
     
     /**
@@ -37,7 +35,7 @@
         var args = args.slice(0) // make a copy so we don't change the outer world
           , getter = args.pop()
           , dependencies = []
-          , async ? {'_callback': null, '_errback': null} : {}
+          , async ? {_callback: null, _errback: null} : {}
           , i = 0
           ;
         
@@ -53,16 +51,12 @@
         
         // dependencies are cleaned args: no doubles, no specials,
         // no curried values. Specials are '_callback' and '_errback',
-        // although this api definition may change soon!
+        // although this api may change soon!
         for(;i<args.length; i++) {
-            if(args[i] in skip)
+            // this is a "curried" argument, not an Expectation
+            if(typeof args[i] !== 'string' || args[i] in skip)
                 continue;
             skip[args[i]] = null
-            
-            // this is a "curried" argument, not an Expectation
-            if(typeof x !== 'string')
-                continue;
-            
             dependencies.push(args[i])
         }
         
@@ -94,10 +88,67 @@
             get: function() { return dependencies; }
         });
     }
+    var _Dp = Dependency.prototype;
     
-    Dependency.prototype.toString = function dependencyString() {
+    _Dp.toString = function dependencyString() {
         return '<Dependency ' + this.name +'>'
     }
+    
+    _Dp._getArg = function(getValue, item) {
+        if(typeof item === 'string')
+            // may throw an Expectation
+            return getValue(item);
+        return item instanceof Argument ? item.value : item;
+    }
+    
+    _Dp.getArgs = function(getValue/* a function*/,
+            callback /* if this.async */, errback /* if this.async */) {
+        
+        // depending on the arguments and callback style of this method
+        // we need to figure out how to call it:
+        var i=0
+          , args = this.args
+          , values = []
+          , specialIndexes = {_callback: [], _errback: []}
+          , united_callback
+          ;
+        
+        if(!this.async) {
+            for(;i<args.length;i++)
+                values.push(this._getArg(getValue, args[i]))
+        }
+        else {
+            for(;i<args.length;i++) {
+                if(args[i] in specialIndexes) {
+                    specialIndexes[args[i]].push(i)
+                    values.push(null) // will be filled below
+                }
+                else
+                    values.push(this._getArg(getValue, args[i]))
+            }
+            
+            // figure out the callback style
+            if(!specialIndexes._errback.length)
+                // define
+                united_callback = function(error, result) {
+                    if(error !== null && error !== undefined)
+                        errback(error)
+                    else
+                        callback(result);
+                };
+            else
+                for(i=0; i<specialIndexes._errback.length; i++)
+                    values[i] = errback;
+            
+            if(!specialIndexes._callback.length)
+                values.push(united_callback || callback);
+            else
+                for(i=0; i<specialIndexes._callback.length; i++)
+                    values[i] = united_callback || callback;
+        }
+        return values
+    }
+    
 
     function DependencyFrame(dependency) {
         this.name = dependency.name;
@@ -168,14 +219,13 @@
         }
         else if(mayBeAsync && name in this.asyncGetters) {
             isAsync = true;
-            cache = this._cache._asyncDependencies
+            cache = this._cache._asyncDependencies;
         }
         else if(!(name in this.syncGetters))
             throw new DependencyGraphError(['Name "',name, '" not found '
                                       +'in DependencyGraph.'].join(''));
         else
-            cache = this._cache._syncDependencies
-        
+            cache = this._cache._syncDependencies;
         
         if(!(name in cache)) {
             getterDef = !isArgument
@@ -186,7 +236,6 @@
             
             cache[name] = new Dependency(name, isAsync, getterDef)
         }
-        
         return cache[name];
     }
     
@@ -200,7 +249,7 @@
         , visiting = {} // detect circles
         , visited = {} // detect circles
         , path = [] // only needed for good error reporting
-        , frame, length, i, dependency, getDependency
+        , frame, length, i, dependency, getFrame
         ;
         
         // factory and currying the async away
@@ -284,7 +333,9 @@
     }
     
     var Constructor = function State(host, graph /* instanceof DependencyGraph */,
-            args /* array: [async [, arguments ... ], callback, errrback] */) {
+            args /* array: [async [, arguments ... ], callback, errback] */) {
+        var i=0;
+                
         this._host = host;
         this._graph = graph;
         
@@ -332,7 +383,7 @@
     }
     
     /**
-     * when the task finished, we clean up here
+     * clean up when the task finishes
      */
     p.removeWaitingAsync = function(dependency) {
         assert(dependency in this._waitingFor, 'Not waiting for '
@@ -346,59 +397,7 @@
         get: function() { return this._waitingCount; }
     });
     
-
-    p._getAsyncArgs(dependency) {
-        // FIXME: may be Dependency side logic
-        throw new NotImplementedError();
-        
-        var callback_index
-          , errback_index
-          , i=0
-          ;
-        // default is the united callback as last argument
-        callback_index = args.length;
-        for(; i<args.length; i++)
-            // first '_errback' wins, the seccond will raise an error
-            // TODO: test this
-            if(errback_index !== undefined && args[i] === '_errback')
-                errback_index = i;
-            // the lowest '_callback' wins
-            else if(i < callback_index && args[i] === '_callback')
-                callback_index = i;
-        
-        if(errback_index === undefined)
-            args[callback_index] = receiver(key, 'united');
-        else {
-            args[errback_index] = receiver(key, 'errback');
-            args[callback_index] = receiver(key, 'callback');
-        }
-    }
-    
-    p._getArgs = function(dependency) {
-        throw new NotImplementedError();
-    }
-
-    p._call = function(dependency) {
-        // FIXME: Next thing to do!
-        // FIXME: may be Dependency side logic
-        throw new NotImplementedError();
-        
-        var namedArgs = {}
-          , i=0
-          ;
-        for(;i<dependency.dependencyCount;i++)
-            namedArgs[dependency.dependencies[i]] = this._obtained[dependency.dependencies[i]]
-        
-        if(dependency.isAsync) {
-            this.addWaitingAsync(dependency)
-            // FIXME!!!
-            dependency.execute(namedArgs, callback, errback)
-        }
-        else
-            this._obtained[dependency.name] = dependency.execute(namedArgs)
-    }
-    
-    p._getDependency = function(name) {
+    p.getDependency = function(name) {
         return this._graph.getDependency(this._async, name);
     }
     
@@ -409,6 +408,9 @@
           , cleaned = []
           , dependent
           ;
+        // substract 1 from each  dependencyCounters[dependent] (because
+        // dependency is resolved)
+        // if a dependencyCounter is 0 the dependent can be executed
         for(;i<dependents.length;i++) {
             dependent = this.getDependency(dependents[i])
             dependencyCounters[dependent.name] -= 1;
@@ -416,6 +418,67 @@
                 cleaned.push(dependent)
         }
         return cleaned;
+    }
+    
+    p.getValue = function(name) {
+        if(!(name in this._obtained))
+            throw new Expectation(name)
+        return this._obtained[name]
+    }
+    
+    /**
+     * use: this._dependencyCallback.bind(this, dependency)
+     */
+    p._dependencyCallback(dependency, result) {
+        this.removeWaitingAsync(dependency)
+        this._obtained[dependency.name] = result
+        cleaned = this._removeDependency(dependency)
+        this._resolve.apply(this, cleaned)
+        if(!this.waitingAsyncCount)
+            // that's it, nothing to do anymore
+            this.execute();
+    }
+    
+    p._errorShutdown = function() {
+        console.log('called _errorShutdown, which is a stub');
+        // TODO: .abort() all async dependencies we are waiting for
+        // and don't execute()/_resolve() further!
+        // see: https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest#abort%28%29
+        // as an example abort API
+        // we might log in the future all dependencies that callback
+        // after _errorShutdown
+    }
+    
+    /**
+     * use: this._dependencyErrback.bind(this, dependency)
+     */
+    p._dependencyErrback(dependency, error) {
+        this.removeWaitingAsync(dependency);
+        this._errorShutdown()
+        this._errback(error)
+    }
+    
+    
+    p._call = function(dependency) {
+        var namedArgs = {}
+          , i=0
+          , args
+          , getValue = this.getValue.bind(this)
+          ;
+        
+        if(dependency.isAsync) {
+            args = dependency.getArgs(
+                getValue,
+                this._dependencyCallback.bind(this, dependency),
+                this._dependencyErrback.bind(this, dependency)
+            )
+            this.addWaitingAsync(dependency)
+            dependency.getter.call(this._host, args)
+        }
+        else {
+            args = dependency.getArgs(getValue)
+            return dependency.getter.call(this._host, args)
+        }
     }
     
     /**
@@ -440,35 +503,19 @@
         while((dependency = resolved.pop()) || dependency = sosd.pop()) {
             if(dependency.isAsync)
                 this._call(dependency)
-            else if(resolved.length === 0)
+            else if(resolved.length !== 0)
                 // execute after all async dependencies have been called
                 sosd.push(k)
             else {
                 // execute the sync dependency
-                this._call(dependency);
+                this._obtained[dependency.name] = this._call(dependency);
                 cleaned = this._removeDependency(dependency)
                 resolved.push.apply(resolved, cleaned)
             }
         }
     }
     
-    /**
-     * 
-     */
-    // this._dependencyCallback.bind(this, dependency)
-    p._dependencyCallback(dependency, result) {
-        this.removeWaitingAsync(dependency)
-        this._obtained[dependency.name] = result
-        cleaned = this._removeDependency(dependency)
-        this._resolve.apply(this, cleaned)
-        if(!this.waitingAsyncCount)
-            // that's it, nothing to do anymore
-            this.execute();
-    }
-    
     p._obtain =  function _obtain(key) {
-        throw new NotImplementedError();
-        
         assert(!(key in this._obtained), 'Key "'+ key +'" must not be '
                                         + 'in this._obtained, but it is.')
         
@@ -527,6 +574,7 @@
             
             if(!this._async)
                 throw e;
+            this._errorShutdown();
             this._errback(e);
             return;
         }
@@ -562,6 +610,5 @@
                 return state.execute();
         }
     }
-    
     return executionEnvironmentFactory;
 })()
