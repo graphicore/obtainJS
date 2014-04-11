@@ -35,7 +35,7 @@
         var args = args.slice(0) // make a copy so we don't change the outer world
           , getter = args.pop()
           , dependencies = []
-          , async ? {_callback: null, _errback: null} : {}
+          , skip = async ? {_callback: null, _errback: null} : {}
           , i = 0
           ;
         
@@ -322,10 +322,10 @@
      * Return the result of _getEvaluationOrder (with underscore).
      * The result will be cached for later possible executions.
      */
-    _DGp.getEvaluationOrder(async, startNode) {
+    _DGp.getEvaluationOrder = function(async, startNode) {
         var cache = async
             ? this._cache.asyncEvaluation
-            ? this._cache.syncEvaluation
+            : this._cache.syncEvaluation;
         if(!(startNode in cache))
             cache[startNode] = this._getEvaluationOrder(async, startNode)
         
@@ -414,7 +414,7 @@
         for(;i<dependents.length;i++) {
             dependent = this.getDependency(dependents[i])
             dependencyCounters[dependent.name] -= 1;
-            if dependencyCounters[dependent.name] === 0:
+            if (dependencyCounters[dependent.name] === 0)
                 cleaned.push(dependent)
         }
         return cleaned;
@@ -429,7 +429,7 @@
     /**
      * use: this._dependencyCallback.bind(this, dependency)
      */
-    p._dependencyCallback(dependency, result) {
+    p._dependencyCallback = function(dependency, result) {
         this.removeWaitingAsync(dependency)
         this._obtained[dependency.name] = result
         cleaned = this._removeDependency(dependency)
@@ -452,7 +452,7 @@
     /**
      * use: this._dependencyErrback.bind(this, dependency)
      */
-    p._dependencyErrback(dependency, error) {
+    p._dependencyErrback = function(dependency, error) {
         this.removeWaitingAsync(dependency);
         this._errorShutdown()
         this._errback(error)
