@@ -27,7 +27,13 @@
         return '<Argument ' + this.name +'>'
     }
     
-    function Dependency(name, async, args/* [argument, names, …, function getter] */) {
+    /**
+     * 
+     * args may be an empty list, if this is the definition of an callerArgument.
+     * That is a dependency that gets injected when calling the method.
+     * 
+     */
+    function Dependency(name, async, args/* [argumentNames, …, function getter] */) {
         var args = args.slice(0) // make a copy so we don't change the outer world
           , getter = args.pop()
           , dependencies = []
@@ -35,11 +41,28 @@
           , i = 0
           ;
         
-        // dependencies are cleaned args: no doubles, no specials
+        // Dependencies of this Dependency (Expectations) are everything
+        // where typeof x === 'string' e.G. strings created with the string
+        // literal. To pass a string as string argument use: new String('value')
+        // So typeof x will be 'object' or use the Argument constructor of
+        // this package: new Argument('value')
+        
+        // Exclude all args that are no Expectations but the value to be
+        // passed itself.
+        
+        
+        // dependencies are cleaned args: no doubles, no specials,
+        // no curried values. Specials are '_callback' and '_errback',
+        // although this api definition may change soon!
         for(;i<args.length; i++) {
             if(args[i] in skip)
                 continue;
             skip[args[i]] = null
+            
+            // this is a "curried" argument, not an Expectation
+            if(typeof x !== 'string')
+                continue;
+            
             dependencies.push(args[i])
         }
         
@@ -109,6 +132,7 @@
           // caches the results of getDependency
             _asyncDependencies: {}
           , _syncDependencies: {}
+          , _callerArgumentsDependencies: {}
           // caches the results of _getEvaluationOrder
           , asyncEvaluation: {}
           , syncEvaluation: {}
@@ -133,23 +157,33 @@
      * caches created Dependency instances, these are reuseable
      */
     _DGp.getDependency = function(mayBeAsync, name) {
-        var isAsync = false, cache, getterDef;
+        var isAsync = false
+          , isArgument = false
+            cache, getterDef;
         
-        if(mayBeAsync && name in this.asyncGetters)
+        if(name in this.callerArguments) {
+            // caller arguments are sync, one could say
+            isArgument = true
+            cache = this._cache._callerArgumentsDependencies
+        }
+        else if(mayBeAsync && name in this.asyncGetters) {
             isAsync = true;
+            cache = this._cache._asyncDependencies
+        }
         else if(!(name in this.syncGetters))
             throw new DependencyGraphError(['Name "',name, '" not found '
                                       +'in DependencyGraph.'].join(''));
-        
-        cache = isAsync
-            ? this._cache._asyncDependencies
-            : this._cache._syncDependencies
-        
+        else
+            cache = this._cache._syncDependencies
         
         
         if(!(name in cache)) {
-            getterDef = (isAsync
-                            ? this.asyncGetters : this.syncGetters)[name]
+            getterDef = !isArgument
+                // pick the right implementation
+                ? (isAsync ? this.asyncGetters : this.syncGetters)[name]
+                // an argument has no definition
+                : [];
+            
             cache[name] = new Dependency(name, isAsync, getterDef)
         }
         
@@ -308,8 +342,13 @@
         return this._waitingCount;
     }
     
+    Object.defineProperty(p, 'waitingAsyncCount', {
+        get: function() { return this._waitingCount; }
+    });
+    
 
     p._getAsyncArgs(dependency) {
+        // FIXME: may be Dependency side logic
         throw new NotImplementedError();
         
         var callback_index
@@ -340,17 +379,43 @@
     }
 
     p._call = function(dependency) {
+        // FIXME: Next thing to do!
+        // FIXME: may be Dependency side logic
         throw new NotImplementedError();
         
-        var args = this._getArgs(dependency)
-          , func = this._getFunc(dependency)
+        var namedArgs = {}
+          , i=0
           ;
+        for(;i<dependency.dependencyCount;i++)
+            namedArgs[dependency.dependencies[i]] = this._obtained[dependency.dependencies[i]]
+        
         if(dependency.isAsync) {
-            this._waitingFor.push(dependency)
-            func.apply(this._host, args)
+            this.addWaitingAsync(dependency)
+            // FIXME!!!
+            dependency.execute(namedArgs, callback, errback)
         }
         else
-            this._obtained[dependency.name] = func.apply(this._host, args)
+            this._obtained[dependency.name] = dependency.execute(namedArgs)
+    }
+    
+    p._getDependency = function(name) {
+        return this._graph.getDependency(this._async, name);
+    }
+    
+    p._removeDependency = function(dependency) {
+        var dependents = this._dependents[dependency.name]
+          , dependencyCounters = this._dependencyCounters
+          , i=0
+          , cleaned = []
+          , dependent
+          ;
+        for(;i<dependents.length;i++) {
+            dependent = this.getDependency(dependents[i])
+            dependencyCounters[dependent.name] -= 1;
+            if dependencyCounters[dependent.name] === 0:
+                cleaned.push(dependent)
+        }
+        return cleaned;
     }
     
     /**
@@ -364,9 +429,7 @@
           , sosd = [] // stack of synchconous dependencies
           , i
           , dependency
-          , dependents = this._dependents
-          , dependencyCounters = this._dependencyCounters
-          , dependent
+          , cleaned
           ;
         
         // IMPORTANT! The logical or || will execute dependency = sosd.pop()
@@ -383,13 +446,8 @@
             else {
                 // execute the sync dependency
                 this._call(dependency);
-                for(i=0; i<dependents[dependency.name].length;i++) {
-                    dependent = dependents[dependency.name][i]
-                    dependencyCounters[dependent] -= 1
-                    if (dependencyCounters[dependent] === 0)
-                        // might be async or sync
-                        resolved.push(this._graph.getDependency(this._async, dependent))
-                }
+                cleaned = this._removeDependency(dependency)
+                resolved.push.apply(resolved, cleaned)
             }
         }
     }
@@ -399,13 +457,14 @@
      */
     // this._dependencyCallback.bind(this, dependency)
     p._dependencyCallback(dependency, result) {
+        this.removeWaitingAsync(dependency)
         this._obtained[dependency.name] = result
-        this._resolve(dependency)
-        if(!this._waitingFor.length)
+        cleaned = this._removeDependency(dependency)
+        this._resolve.apply(this, cleaned)
+        if(!this.waitingAsyncCount)
             // that's it, nothing to do anymore
             this.execute();
     }
-    
     
     p._obtain =  function _obtain(key) {
         throw new NotImplementedError();
@@ -417,53 +476,39 @@
         var order = this._graph.getEvaluationOrder(this._async, key)
           , resolved = []
           , k
+          , dependents = this._dependents = order[0]
+          , dependencyCounters = this._dependencyCounters = order[1]
         ;
         
-        this._dependencyCounters = order[0];
-        this._dependents = order[1];
+        // Some values are already known, from callerArguments or previous
+        // calls to _obtainAPI
+        for(k in this._obtained)
+            // Don't use the return value here, as the next step covers that.
+            this._removeDependency(this.getDependency(k))
         
-        // when count of unresolved dependencies === 0 the dependent
-        // can be executed
-        
-        
-        // this must exclude all already known dependencies,
-        // like in callerArguments (everything that is already obtained)
-        // or special args _callback, _errback, _obtain(?), etc.
-        //   I'm noy shure if this is true, if it's already obtained we'll
-        //   detect it later and callerArguments are like dependencies without
-        //   own dependencies
-        
-        // AND all args that are no Expectations but the value to be passed
-        //itself: Expectations are everything where typof x === 'string'
-        // e.G. strings created with the string literal. to pass a string
-        // as string argument use new String('value') so typeof x will be
-        // 'object' or use the Argument constructor of this package:
-        // new Argument('value')
-        
-        // TODO: callerArguments and everything that is already obtained
-        // callerArguments probably shoudn't even be accounted by this._graph.getEvaluationOrder
-        
-        // Every dependency with a count of 0 can be executed immediately
-        for(k in this._dependencyCounters) {
-            if (this._dependencyCounters[k] === 0)
-                resolved.push(this._graph.getDependency(this._async, k));
+        // Every dependency with a count of 0 can be executed now
+        for(k in dependencyCounters) {
+            if (dependencyCounters[k] === 0)
+                resolved.push(this.getDependency(k));
         }
         
         this._resolve.apply(this, resolved)
-        // if there wasn't any async dependency we should have a result
-        // by now. So we should return it.
-        if(this._waitingFor.length)
-            throw new AsyncExecutionException()
         
+        if(this.waitingAsyncCount)
+            // interrupt here, the callback will restart the thread
+            throw new AsyncExecutionException()
+        // if there wasn't any async dependency we should have a result
         // it has to be in this._obtained at this point
+        assert(key in this._obtained, 'Key "'+ key +'" must be in '
+                                    + 'this._obtained, but it isn\'t.')
     }
     
     p._obtainAPI = function _obtainAPI(key) {
         if (!(key in this._obtained))
             // will raise AsyncExecutionException when needed
             this._obtain(key);
-        assert(key in this._obtained, 'Key "'+ key +'" must be in '
-                                    + 'this._obtained, but it isn\'t.')
+        // This will only be executed when the value is already there.
+        // If we have to wait AsyncExecutionException did interrupt already.
         return this._obtained[key];
     }
     
