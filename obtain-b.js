@@ -106,9 +106,12 @@
         this.syncGetters = syncGetters;
         
         this._cache = {
+          // caches the results of getDependency
             _asyncDependencies: {}
           , _syncDependencies: {}
-            
+          // caches the results of _getEvaluationOrder
+          , asyncEvaluation: {}
+          , syncEvaluation: {}
         }
         
         // list of argument names of the 'job'
