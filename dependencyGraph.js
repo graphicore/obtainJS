@@ -11,9 +11,9 @@ dependencies = {
 }
 
 
-function Frame(node, entering) {
+function Frame(node, hasDependencies) {
     this.node = node;
-    this.entering = entering;
+    this.visitDependencies = hasDependencies;
 }
 
 function prepareEvaluation(startNode, dependencies) {
@@ -37,7 +37,7 @@ function prepareEvaluation(startNode, dependencies) {
             continue;
         }
         
-        if(frame.entering && (node in entered)) {
+        if(frame.visitDependencies && (node in entered)) {
             // throw new Error()
             
             // I think a direct error is better here. However, we could
@@ -57,10 +57,10 @@ function prepareEvaluation(startNode, dependencies) {
         
         dependencyCount[node] = length = dependencies[node].length;
         
-        if(frame.entering) {
+        if(frame.visitDependencies) {
             // entering the nodes dependencies
             entered[node] = null;
-            frame.entering = false;
+            frame.visitDependencies = false;
             
             for(i=0; i<length; i++) {
                 dependency = dependencies[node][i];
