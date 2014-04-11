@@ -18,8 +18,8 @@
         return '<Expectation ' + this.name +'>'
     }
     
-    function Argument(value) {
-        Object.defineProperty(this, 'value', {
+    function Argument(name) {
+        Object.defineProperty(this, 'name', {
             get: function() { return name; }
         });
     }
@@ -27,16 +27,62 @@
         return '<Argument ' + this.name +'>'
     }
     
-    function Dependency(value) {
-        Object.defineProperty(this, 'value', {
+    function Dependency(name, async, args/* [argument, names, …, function getter] */) {
+        var args = args.slice(0) // make a copy so we don't change the outer world
+          , getter = args.pop()
+          , dependencies = []
+          , async ? {'_callback': null, '_errback': null} : {}
+          , i = 0
+          ;
+        
+        // dependencies are cleaned args: no doubles, no specials
+        for(;i<args.length; i++) {
+            if(args[i] in skip)
+                continue;
+            skip[args[i]] = null
+            dependencies.push(args[i])
+        }
+        
+        Object.defineProperty(this, 'name', {
             get: function() { return name; }
         });
+        
+        Object.defineProperty(this, 'async', {
+            get: function() { return !!async; }
+        });
+        
+        Object.defineProperty(this, 'getter', {
+            get: function() { return getter; }
+        });
+        
+        Object.defineProperty(this, 'args', {
+            get: function() { return args; }
+        });
+        
+        Object.defineProperty(this, 'hasDependencies', {
+            get: function() { return !!dependencies.length; }
+        });
+        
+        Object.defineProperty(this, 'dependencyCount', {
+            get: function() { return dependencies.length; }
+        });
+        
+        Object.defineProperty(this, 'dependencies', {
+            get: function() { return dependencies; }
+        });
     }
-    Dependency.prototype.toString = function dString() {
+    
+    Dependency.prototype.toString = function dependencyString() {
         return '<Dependency ' + this.name +'>'
     }
-    
-    
+
+    function DependencyFrame(dependency) {
+        this.name = dependency.name;
+        this.visitDependencies = dependency.hasDependencies;
+        this.dependency = dependency;
+        this.dependencyCount = dependency.dependencyCount;
+    }
+
     function AsyncExecutionException(){}
     
     function AssertionFailed(){
@@ -49,18 +95,156 @@
             throw new AssertionFailed(mesage);
     }
     
+    function DependencyGraphError() {
+        Error.apply(this, Array.prototype.slice.call(arguments))
+    }
+    DependencyGraphError.prototype = Object.create(Error.prototype)
+    
     function DependencyGraph(
             syncGetters, asyncGetters, callerArguments, job) {
         this.asyncGetters = asyncGetters;
         this.syncGetters = syncGetters;
         
+        this._cache = {
+            _asyncDependencies: {}
+          , _syncDependencies: {}
+            
+        }
+        
+        // list of argument names of the 'job'
         this.callerArguments = callerArguments instanceof Array
             ? callerArguments
             : [];
         
         this.job = job;
     }
-     var _DGp = DependencyGraph.prototype;
+    
+    var _DGp = DependencyGraph.prototype;
+    
+    /**
+     * Get the Dependency instance for name.
+     * If mayBeAsync is true and an asyncGetter for name is defined,
+     * the Dependency will resolve asynchronous. Otherwise it will be
+     * synchronous.
+     * 
+     * caches created Dependency instances, these are reuseable
+     */
+    _DGp.getDependency = function(mayBeAsync, name) {
+        var isAsync = false, cache, getterDef;
+        
+        if(mayBeAsync && name in this.asyncGetters)
+            isAsync = true;
+        else if(!(name in this.syncGetters))
+            throw new DependencyGraphError(['Name "',name, '" not found '
+                                      +'in DependencyGraph.'].join(''));
+        
+        cache = isAsync
+            ? this._cache._asyncDependencies
+            : this._cache._syncDependencies
+        
+        
+        
+        if(!(name in cache)) {
+            getterDef = (isAsync
+                            ? this.asyncGetters : this.syncGetters)[name]
+            cache[name] = new Dependency(name, isAsync, getterDef)
+        }
+        
+        return cache[name];
+    }
+    
+    /**
+     * prepare evaluation
+     */
+    _DGp._getEvaluationOrder = function (async, startNode) {
+        var stack = []
+        , dependencyCount = {} // return value
+        , dependents = {} // return value
+        , visiting = {} // detect circles
+        , visited = {} // detect circles
+        , path = [] // only needed for good error reporting
+        , frame, length, i, dependency, getDependency
+        ;
+        
+        // factory and currying the async away
+        getFrame = function(name) {
+            return new DependencyFrame(this.getDependency(async, name));
+        }.bind(this);
+        
+        stack.push(getFrame(startNode));
+        dependents[startNode] = [];
+        while(stack.length) {
+            frame = stack[stack.length-1];
+            
+            if(frame.name in visited) {
+                stack.pop(); // clear frame
+                continue;
+            }
+            
+            if(frame.visitDependencies && (frame.name in visiting))
+                // I think a direct error is better here. However, we could
+                // collect all found strongly connected components and return
+                // these. That might ease debugging or make it harder.
+                throw new DependencyGraphError(['Circle detected but the '
+                            , 'graph must be acyclic!'
+                            , 'Current frame.name:', frame.name
+                            , 'Path:', path.join('->')
+                            , 'strongly connected component:'
+                            , path.slice(path.indexOf(frame.name)).concat([frame.name]).join('->')
+                            ].join(' '));
+            
+            // path is only used for the error message above
+            path.push(frame.name);
+            
+            dependencyCount[frame.name] = frame.dependencyCount;
+            if(frame.visitDependencies) {
+                // entering the frames dependencies
+                visiting[frame.name] = null;
+                frame.visitDependencies = false;
+                
+                for(i=0; i<frame.dependencyCount; i++) {
+                    dependency = frame.dependency.dependencies[i];
+                    
+                    // create the transpose graph
+                    if(!(dependency in dependents))
+                        dependents[dependency] = [];
+                    // frame.name is a dependent of dependency
+                    dependents[dependency].push(frame.name);
+                    
+                    if(dependency in visited)
+                        // shortcut: this will be detected at the beginning of
+                        // the while loop anyways, so we save us from creating,
+                        // pushing and then popping the frame
+                        continue;
+                    
+                    // create a new frame
+                    // Frame.visitDependencies is true when the dependency has any dependencies
+                    stack.push(getFrame(dependency));
+                }
+            }
+            else {
+                // leaving the frame
+                visited[frame.name] = null;
+                path.pop();
+                stack.pop();
+            }
+        }
+        return [dependencyCount, dependents]
+    }
+    
+    /**
+     * Return the result of _getEvaluationOrder (with underscore).
+     * The result will be cached for later possible executions.
+     */
+    _DGp.getEvaluationOrder(async, startNode) {
+        var cache = async
+            ? this._cache.asyncEvaluation
+            ? this._cache.syncEvaluation
+        if(!(startNode in cache))
+            cache[startNode] = this._getEvaluationOrder(async, startNode)
+        
+        return cache[startNode];
+    }
     
     var Constructor = function State(host, graph /* instanceof DependencyGraph */,
             args /* array: [async [, arguments ... ], callback, errrback] */) {
@@ -71,6 +255,7 @@
         this._args = args.slice(1);
         // FIXME: in case we'll support returning a promise this will need
         // an adjustment here
+        
         this._errback = this._async
             ? this._args.pop()
             : undefined;
@@ -80,27 +265,38 @@
         
         this._obtained = {};
         
+        // callerArguments are already obtained
         for(;i<this._graph.callerArguments.length; i++)
             this._obtained[this._graph.callerArguments[i]] = this._args[i];
         this._args.unshift(this._obtainAPI.bind(this));
         
         this._waitingFor = {}
         this._waitingCount = 0
-    }
         
+        this._dependencyCounters = null;
+        this._dependents = null;
+        
+    }
+    
     // Constructor.prototype = Object.create(null);
     var p = Constructor.prototype;
     
+    /**
+     * keep track of tasks we are waiting for
+     */
     p.addWaitingAsync = function(dependency) {
         assert(!(dependency in this._waitingFor), 'Already waiting for '
                                                   + dependency)
-        // Add a time when waiting started, or a setTimeout for
+        // Useful? Add a time when waiting started, or a setTimeout for
         // timeout control or such?
         this._waitingFor[dependency] = null;
         this._waitingCount += 1;
         return this._waitingCount
     }
     
+    /**
+     * when the task finished, we clean up here
+     */
     p.removeWaitingAsync = function(dependency) {
         assert(dependency in this._waitingFor, 'Not waiting for '
                                                   + dependency)
@@ -109,15 +305,37 @@
         return this._waitingCount;
     }
     
-    // this._dependencyCallback.bind(this, dependency)
-    p._dependencyCallback(dependency, result) {
-        this._obtained[dependency.name] = result
-        this._resolve(dependency)
-        if(!this._waitingFor.length)
-            // that's it, nothing to do anymore
-            this.execute();
+
+    p._getAsyncArgs(dependency) {
+        throw new NotImplementedError();
+        
+        var callback_index
+          , errback_index
+          , i=0
+          ;
+        // default is the united callback as last argument
+        callback_index = args.length;
+        for(; i<args.length; i++)
+            // first '_errback' wins, the seccond will raise an error
+            // TODO: test this
+            if(errback_index !== undefined && args[i] === '_errback')
+                errback_index = i;
+            // the lowest '_callback' wins
+            else if(i < callback_index && args[i] === '_callback')
+                callback_index = i;
+        
+        if(errback_index === undefined)
+            args[callback_index] = receiver(key, 'united');
+        else {
+            args[errback_index] = receiver(key, 'errback');
+            args[callback_index] = receiver(key, 'callback');
+        }
     }
     
+    p._getArgs = function(dependency) {
+        throw new NotImplementedError();
+    }
+
     p._call = function(dependency) {
         throw new NotImplementedError();
         
@@ -167,11 +385,24 @@
                     dependencyCounters[dependent] -= 1
                     if (dependencyCounters[dependent] === 0)
                         // might be async or sync
-                        resolved.push(this._graph.get(dependent))
+                        resolved.push(this._graph.getDependency(this._async, dependent))
                 }
             }
         }
     }
+    
+    /**
+     * 
+     */
+    // this._dependencyCallback.bind(this, dependency)
+    p._dependencyCallback(dependency, result) {
+        this._obtained[dependency.name] = result
+        this._resolve(dependency)
+        if(!this._waitingFor.length)
+            // that's it, nothing to do anymore
+            this.execute();
+    }
+    
     
     p._obtain =  function _obtain(key) {
         throw new NotImplementedError();
@@ -179,18 +410,18 @@
         assert(!(key in this._obtained), 'Key "'+ key +'" must not be '
                                         + 'in this._obtained, but it is.')
         
-        // so we need to obtain a key
-        // this should build a topological sorting as a starting point
+        // order is a topological sorting as a starting point
+        var order = this._graph.getEvaluationOrder(this._async, key)
+          , resolved = []
+          , k
+        ;
         
-        var dependentMethod, dependentArgs, dependencies, dependents = {};
+        this._dependencyCounters = order[0];
+        this._dependents = order[1];
         
-        dependentMethod = this._graph.asyncGetters[key][0];
-        dependentArgs = this._graph.asyncGetters[key].slice(1);
-        
-        
-        // dependents with count of unresolved dependencies
         // when count of unresolved dependencies === 0 the dependent
         // can be executed
+        
         
         // this must exclude all already known dependencies,
         // like in callerArguments (everything that is already obtained)
@@ -206,21 +437,13 @@
         // 'object' or use the Argument constructor of this package:
         // new Argument('value')
         
-        // FIXME: for easier development I use the not cleaned args yet
-        dependencies = dependentArgs
-        // TODO:
-        // this.dependencyCounters, this.dependents = prepareEvaluation(key, dependencies)
-        // see prepareEvaluation of dependencyGraph.js to get 
-        // dependencyCount and dependents and start from there
-        
+        // TODO: callerArguments and everything that is already obtained
+        // callerArguments probably shoudn't even be accounted by this._graph.getEvaluationOrder
         
         // Every dependency with a count of 0 can be executed immediately
-        var resolved = []
-          , k
-          ;
-        for(k in dependencyCounters) {
-            if (dependencyCounters[k] === 0)
-                resolved.push(this._graph.get(k));
+        for(k in this._dependencyCounters) {
+            if (this._dependencyCounters[k] === 0)
+                resolved.push(this._graph.getDependency(this._async, k));
         }
         
         this._resolve.apply(this, resolved)
@@ -228,7 +451,8 @@
         // by now. So we should return it.
         if(this._waitingFor.length)
             throw new AsyncExecutionException()
-        // it has to be in this._obtained now
+        
+        // it has to be in this._obtained at this point
     }
     
     p._obtainAPI = function _obtainAPI(key) {
@@ -282,7 +506,7 @@
             // if an extra decoupling is needed (when there was no async
             // execution after resolving)
             // FIXME: Think about doing this smarter.
-            // FIXME: When promises are aded to the API this needs reflection
+            // FIXME: When promises are added to the API this needs reflection
             // here, too.
             if (async)
                 setTimeout(state.execute.bind(state), 0)
