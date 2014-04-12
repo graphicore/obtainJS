@@ -1,14 +1,11 @@
 "use strict";
 
-(function() {
-    
     function NotImplementedError(){}
     
     function Expectation(name) {
         Object.defineProperty(this, 'name', {
             get: function() {return name;}
         });
-        Error.apply(this, Array.prototype.slice.call(arguments))
     }
     Expectation.prototype = Object.create(Error.prototype)
     Expectation.prototype.toString = function expectationString() {
@@ -73,7 +70,7 @@
         });
         
         Object.defineProperty(this, 'args', {
-            get: function() { return args; }
+            get: function() { return args.slice(0); }
         });
         
         Object.defineProperty(this, 'hasDependencies', {
@@ -85,7 +82,7 @@
         });
         
         Object.defineProperty(this, 'dependencies', {
-            get: function() { return dependencies; }
+            get: function() { return dependencies.slice(0); }
         });
     }
     var _Dp = Dependency.prototype;
@@ -159,18 +156,23 @@
 
     function AsyncExecutionException(){}
     
-    function AssertionFailed(){
-        Error.apply(this, Array.prototype.slice.call(arguments))
+    function AssertionFailed(message) {
+        this.message = message;
+        this.name = "AssertionFailed";
+        Error.captureStackTrace(this, AssertionFailed);
     }
     AssertionFailed.prototype = Object.create(Error.prototype)
     
     function assert(test, message) {
         if(!test)
-            throw new AssertionFailed(mesage);
+            throw new AssertionFailed(message);
     }
     
-    function DependencyGraphError() {
-        Error.apply(this, Array.prototype.slice.call(arguments))
+    function DependencyGraphError(message) {
+        this.message = message;
+        this.name = "DependencyGraphError";
+        Error.captureStackTrace(this, DependencyGraphError);
+        
     }
     DependencyGraphError.prototype = Object.create(Error.prototype)
     
@@ -199,6 +201,14 @@
     
     var _DGp = DependencyGraph.prototype;
     
+    _DGp._nameIsCallerArg = function(name) {
+        var i=0;
+        for(;i<this.callerArguments.length;i++)
+            if(this.callerArguments[i] === name)
+                return true;
+        return false;
+    }
+    
     /**
      * Get the Dependency instance for name.
      * If mayBeAsync is true and an asyncGetter for name is defined,
@@ -210,9 +220,12 @@
     _DGp.getDependency = function(mayBeAsync, name) {
         var isAsync = false
           , isArgument = false
-            cache, getterDef;
-        
-        if(name in this.callerArguments) {
+          , cache
+          , getterDef
+          , nameIsCallerArg
+          , i=0
+          ;
+        if(this._nameIsCallerArg(name)) {
             // caller arguments are sync, one could say
             isArgument = true
             cache = this._cache._callerArgumentsDependencies
@@ -325,14 +338,22 @@
     _DGp.getEvaluationOrder = function(async, startNode) {
         var cache = async
             ? this._cache.asyncEvaluation
-            : this._cache.syncEvaluation;
+            : this._cache.syncEvaluation
+          , cacheItem
+          , copy = [{}, {}]
+          , k
+          ;
         if(!(startNode in cache))
             cache[startNode] = this._getEvaluationOrder(async, startNode)
-        
-        return cache[startNode];
+        cacheItem = cache[startNode];
+        for(k in cacheItem[0])
+            copy[0][k] = cacheItem[0][k];
+        for(k in cacheItem[1])
+            copy[1][k] = cacheItem[1][k].slice();
+        return copy;
     }
     
-    var Constructor = function State(host, graph /* instanceof DependencyGraph */,
+    function State(host, graph /* instanceof DependencyGraph */,
             args /* array: [async [, arguments ... ], callback, errback] */) {
         var i=0;
                 
@@ -364,10 +385,11 @@
         this._dependencyCounters = null;
         this._dependents = null;
         
+        this._isShutDown = false
     }
     
-    // Constructor.prototype = Object.create(null);
-    var p = Constructor.prototype;
+    // State.prototype = Object.create(null);
+    var p = State.prototype;
     
     /**
      * keep track of tasks we are waiting for
@@ -402,7 +424,7 @@
     }
     
     p._removeDependency = function(dependency) {
-        var dependents = this._dependents[dependency.name]
+        var dependents = this._dependents[dependency.name] || []
           , dependencyCounters = this._dependencyCounters
           , i=0
           , cleaned = []
@@ -430,6 +452,10 @@
      * use: this._dependencyCallback.bind(this, dependency)
      */
     p._dependencyCallback = function(dependency, result) {
+        var cleaned;
+        if(this._isShutDown)
+            // FIXME: start logging or provide a status otherwise
+            return;
         this.removeWaitingAsync(dependency)
         this._obtained[dependency.name] = result
         cleaned = this._removeDependency(dependency)
@@ -440,19 +466,21 @@
     }
     
     p._errorShutdown = function() {
-        console.log('called _errorShutdown, which is a stub');
+        this._isShutDown = true;
+        // TODO: log all dependencies that callback or errback after shutdown
         // TODO: .abort() all async dependencies we are waiting for
         // and don't execute()/_resolve() further!
         // see: https://developer.mozilla.org/en-US/docs/Web/API/XMLHttpRequest#abort%28%29
         // as an example abort API
-        // we might log in the future all dependencies that callback
-        // after _errorShutdown
     }
     
     /**
      * use: this._dependencyErrback.bind(this, dependency)
      */
     p._dependencyErrback = function(dependency, error) {
+        if(this._isShutDown)
+            // FIXME: start logging or provide a status otherwise
+            return;
         this.removeWaitingAsync(dependency);
         this._errorShutdown()
         this._errback(error)
@@ -465,19 +493,18 @@
           , args
           , getValue = this.getValue.bind(this)
           ;
-        
-        if(dependency.isAsync) {
+        if(dependency.async) {
             args = dependency.getArgs(
                 getValue,
                 this._dependencyCallback.bind(this, dependency),
                 this._dependencyErrback.bind(this, dependency)
             )
             this.addWaitingAsync(dependency)
-            dependency.getter.call(this._host, args)
+            dependency.getter.apply(this._host, args)
         }
         else {
             args = dependency.getArgs(getValue)
-            return dependency.getter.call(this._host, args)
+            return dependency.getter.apply(this._host, args)
         }
     }
     
@@ -488,24 +515,26 @@
      * where is the point otherwise?)
      */
     p._resolve = function(/* dependency, ... */) {
-        var resolved = Array.prototype.call(arguments)
+        var resolved = Array.prototype.slice.call(arguments)
           , sosd = [] // stack of synchconous dependencies
-          , i
           , dependency
           , cleaned
           ;
+        
         
         // IMPORTANT! The logical or || will execute dependency = sosd.pop()
         // only if the first expression returns something false.
         // so we first we _call all async dependencies and then the sync
         // ones. This is done, because we wan't to dispatch the async requests
         // ASAP.
-        while((dependency = resolved.pop()) || dependency = sosd.pop()) {
-            if(dependency.isAsync)
+        while((dependency = resolved.pop()) || (dependency = sosd.pop())) {
+            if(dependency.name in this._obtained)
+                continue
+            else if(dependency.async)
                 this._call(dependency)
             else if(resolved.length !== 0)
                 // execute after all async dependencies have been called
-                sosd.push(k)
+                sosd.push(dependency)
             else {
                 // execute the sync dependency
                 this._obtained[dependency.name] = this._call(dependency);
@@ -523,16 +552,14 @@
         var order = this._graph.getEvaluationOrder(this._async, key)
           , resolved = []
           , k
-          , dependents = this._dependents = order[0]
-          , dependencyCounters = this._dependencyCounters = order[1]
+          , dependencyCounters = this._dependencyCounters = order[0]
+          , dependents = this._dependents = order[1]
         ;
-        
         // Some values are already known, from callerArguments or previous
         // calls to _obtainAPI
         for(k in this._obtained)
             // Don't use the return value here, as the next step covers that.
             this._removeDependency(this.getDependency(k))
-        
         // Every dependency with a count of 0 can be executed now
         for(k in dependencyCounters) {
             if (dependencyCounters[k] === 0)
@@ -540,12 +567,12 @@
         }
         
         this._resolve.apply(this, resolved)
-        
         if(this.waitingAsyncCount)
             // interrupt here, the callback will restart the thread
             throw new AsyncExecutionException()
         // if there wasn't any async dependency we should have a result
         // it has to be in this._obtained at this point
+        
         assert(key in this._obtained, 'Key "'+ key +'" must be in '
                                     + 'this._obtained, but it isn\'t.')
     }
@@ -563,17 +590,17 @@
         var result;
         try {
             // job is expected to call _obtainAPI zero or more times
-            result = this.graph.job.call(this._host, this._args);
+            result = this._graph.job.apply(this._host, this._args);
         }
         catch(e) {
             if(e instanceof AsyncExecutionException) {
-                console.log('AsyncExecutionException');
                 // the receiver will call execute again
                 return;
             }
             
-            if(!this._async)
+            if(!this._async){
                 throw e;
+            }
             this._errorShutdown();
             this._errback(e);
             return;
@@ -591,8 +618,9 @@
                                         callerArguments, job);
         return function runner( /* async, [ ... arguments, ] callback, errrback */) {
             // 'this' is the host
-            var state = new State(this, graph, Array.prototype.slice.call(arguments));
-            
+            var state = new State(this, graph, Array.prototype.slice.call(arguments))
+              , async = arguments[0]
+              ;
             // There needs to be an assurance that an async job is
             // deferred (asynchronously) at least once! Theoretically,
             // since a developer might not expect stuff like an immediate
@@ -610,5 +638,6 @@
                 return state.execute();
         }
     }
-    return executionEnvironmentFactory;
-})()
+
+exports.factory = executionEnvironmentFactory
+exports.Argument = Argument
