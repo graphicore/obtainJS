@@ -1,0 +1,10 @@
+{
+  "name": "obtainjs",
+  "description": "DRY development of synchronous and asynchronous JavaScript",
+  "version": "0.0.0",
+  "devDependencies": {
+    "intern": "~1.6.2"
+  },
+  "scripts": {},
+  "main": "lib/obtan.js"
+}
