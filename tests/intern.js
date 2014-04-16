@@ -56,7 +56,7 @@ define({
 	// can be used here
 	loader: {
 		// Packages that should be registered with the loader in each testing environment
-		packages: [ { name: 'obtain', location: 'lib' } ]
+		// packages: [ { name: 'obtain', location: 'lib' } ]
 	},
 
 	// Non-functional test suite(s) to run in each browser
