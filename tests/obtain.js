@@ -1,11 +1,10 @@
-"use strict";
 define([
     'intern!object',
     'intern/chai!assert',
     'lib/obtain',
     'lib/Promise'
 ], function (registerSuite, assert, obtain, Promise) {
-    
+    "use strict";
     var echo_job = obtain.factory({},{},[], function(obtain, input){ return input; })
       , exception_job = obtain.factory({},{},[], function(obtain, input){throw new input(); })
       , get_callbacks = function(Err, input) {
