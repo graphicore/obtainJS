@@ -362,5 +362,55 @@ define([
                 .then(cbs.callback_should_run, cbs.errback_dont_run)
                 ;
         }
+      , async_callback_sync_error: function() {
+            //
+            // if this test fails
+            // in node js (bad):
+            //   the intern just stops executing, because there is an
+            //   uncaught exception error.
+            //   It should however raise its timeout exception after 1000
+            //   seconds, because the callback never is invoked
+            // 
+            // in the browsers (good):
+            //    uncaught exception: [object Object] is raised
+            //    then the test fails because of the timeout of the test
+            var dfd = this.async(1000)
+              , Err = function(){}
+              , callbackExecuted = false
+              , job = obtain.factory(
+                    {
+                        // this will run in the callback of "asyncValue"
+                        // and raise an error. That error must be caught
+                        // and redirected to errback
+                        error: [ 'asyncValue', function(asyncValue) {
+                            throw new Err(asyncValue);
+                        }]
+                    }
+                  , {
+                        asyncValue: ['_callback', '_errback',
+                        function(callback, errback){
+                            setTimeout(function(){callback('any value');})
+                        }]
+                    }
+                  , []
+                  , function(obtain) {
+                        return obtain('error');
+                    }
+                )
+              , callback = {
+                    unified: dfd.callback(function (error, result) {
+                        callbackExecuted = true;
+                        // this shouldn't run here ever
+                        if(!error)
+                            throw new Error('This shouldn\'t run here ever.')
+                        assert.instanceOf(error, Err, 'error should be an Err');
+                    })
+                }
+              ;
+            job(callback);
+        }
+        
+        
+        
     });
 });
