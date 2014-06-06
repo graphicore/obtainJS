@@ -55,7 +55,7 @@ promise.then(
     }
 )
 
-// Alternatively, continuation passing style:
+// Alternatively use the returned promise directly:
 
 readFile(asyncExecution, './file-to-read.js')
     .then(
