@@ -107,8 +107,8 @@ readfile(asyncExecution, './file-to-read.js');
 As a smart ;-) *LIBRARY AUTHOR*
 -------------------------------
 
-who wan't to implement a API using with ObtainJS the work is a bit more,
-stay with me.
+who's going to implement a API using with ObtainJS the work is a bit more.
+Stay with me.
 
 The behavior above is achieved by defining a twofold dependency tree: one
 for the actions  of the synchronous execution path and one for the actions
@@ -136,7 +136,7 @@ synchronous AND blocking junk. The rest does obtainJS for you. Namely:
 from above, taken directly from working code at
 [ufoJS](https://github.com/graphicore/ufoJS/blob/master/lib/tools/io/staticBrowserREST.js)
 
-```
+```js
 define(['ufojs/obtainJS/lib/obtain'], function(obtain) {
     
     // obtain.factory creates our final function
