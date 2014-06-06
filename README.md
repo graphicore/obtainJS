@@ -239,8 +239,9 @@ var myFunction = obtain.factory(
     sample1: ['arg1',  '_callback', function(arg1, callback) {
             // callback(error, result)
         }],
-    // you can order separate callback and errback when using both special names
-    sample2: ['arg1',  '_callback', '_errback' function(arg1, callback, errback) {
+    // you can order separate callback and errback when using both special
+    // names "_callback" and "_errback"
+    sample2: ['arg1',  '_callback', '_errback', function(arg1, callback, errback) {
             // errback(error)
             // callback(result)
         }],
