@@ -121,13 +121,13 @@ actions if there is no asynchronous action defined for a dependency.
 equivalent is non-blocking*. This is where you **DRY**!
 
 So, what you do, for example, is splitting your synchronous and blocking 
-method in small function-junks. These junks depend on the results of each
-other. Then you define a non-blocking AND asynchronous junk for each 
-synchronous AND blocking junk. The rest does obtainJS for you. Namely:
+method in small function-chunks. These chunks depend on the results of each
+other. Then you define a non-blocking AND asynchronous chunk for each
+synchronous AND blocking chunk. The rest does obtainJS for you. Namely:
 
  * creating a switch for synchronous or asynchronous execution
  * resolving the dependency tree
- * executing the junks in the right order
+ * executing the chunks in the right order
  * providing you with the results via:
    * return value when using the synchronous path
    * promises OR callbacks (your choice!) when using the asynchronous path
