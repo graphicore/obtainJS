@@ -1,7 +1,7 @@
 {
   "name": "obtainjs",
   "description": "DRY development of synchronous and asynchronous JavaScript",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "devDependencies": {
     "intern": "~1.6.2",
     "lie": "~2.6.0"
